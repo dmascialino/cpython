@@ -756,6 +756,29 @@ class _LoaderBasics:
 
 class SourceLoader(_LoaderBasics):
 
+    # (mtime, size) of the source as reported by path_stats() when the code
+    # was last loaded by this loader, or None if unknown.
+    _source_stats = None
+
+    def _is_source_stale(self, fullname):
+        """Tell if the source changed after the code was loaded.
+
+        Return True if the source of the module no longer matches the code
+        that this loader loaded, False if it still does, and None if that
+        cannot be determined (nothing was loaded, or the source is not
+        available anymore).
+
+        Used by the traceback module.
+        """
+        loaded_stats = self._source_stats
+        if loaded_stats is None:
+            return None
+        try:
+            st = self.path_stats(self.get_filename(fullname))
+        except (ImportError, OSError):
+            return None
+        return (st['mtime'], st.get('size')) != loaded_stats
+
     def path_mtime(self, path):
         """Optional method that returns the modification time (an int) for the
         specified path (a str).
@@ -838,6 +861,7 @@ class SourceLoader(_LoaderBasics):
                 pass
             else:
                 source_mtime = int(st['mtime'])
+                self._source_stats = (st['mtime'], st.get('size'))
                 try:
                     data = self.get_data(bytecode_path)
                 except OSError:
@@ -912,8 +936,11 @@ class FileLoader:
         self.path = path
 
     def __eq__(self, other):
+        # Which version of the source was loaded is not part of the
+        # identity of the loader.
+        ignored = {'_source_stats': None}
         return (self.__class__ == other.__class__ and
-                self.__dict__ == other.__dict__)
+                self.__dict__ | ignored == other.__dict__ | ignored)
 
     def __hash__(self):
         return hash(self.name) ^ hash(self.path)

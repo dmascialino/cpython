@@ -337,7 +337,8 @@ class FrameSummary:
     """
 
     __slots__ = ('filename', 'lineno', 'end_lineno', 'colno', 'end_colno',
-                 'name', '_lines', '_lines_dedented', 'locals', '_code')
+                 'name', '_lines', '_lines_dedented', 'locals', '_code',
+                 '_source_stale')
 
     def __init__(self, filename, lineno, name, *, lookup_line=True,
             locals=None, line=None,
@@ -358,6 +359,7 @@ class FrameSummary:
         self.end_colno = end_colno
         self.name = name
         self._code = kwargs.get("_code")
+        self._source_stale = kwargs.get("_source_stale", False)
         self._lines = line
         self._lines_dedented = None
         if lookup_line:
@@ -424,6 +426,31 @@ class FrameSummary:
             return None
         # return only the first line, stripped
         return self._lines.partition("\n")[0].strip()
+
+
+_STALE_SOURCE_NOTE = ("Warning: the source file changed after this code was "
+                      "loaded; the line shown may be wrong")
+
+
+def _is_source_stale(filename, module_globals):
+    """Return True if the loader of the module with these globals reports
+    that *filename* was modified after the running code was loaded."""
+    try:
+        spec = module_globals.get('__spec__')
+        loader = getattr(spec, 'loader', None)
+        if loader is None:
+            loader = module_globals.get('__loader__')
+        is_source_stale = getattr(loader, '_is_source_stale', None)
+        if is_source_stale is None:
+            return False
+        name = getattr(spec, 'name', None) or module_globals.get('__name__')
+        # Code compiled with another filename (e.g. by exec()) does not come
+        # from the source that the loader knows about.
+        if loader.get_filename(name) != filename:
+            return False
+        return is_source_stale(name) is True
+    except Exception:
+        return False
 
 
 def walk_stack(f):
@@ -526,12 +553,16 @@ class StackSummary(list):
 
         result = klass()
         fnames = set()
+        stale = {}
         for f, (lineno, end_lineno, colno, end_colno) in frame_gen:
             co = f.f_code
             filename = co.co_filename
             name = co.co_name
             fnames.add(filename)
             linecache.lazycache(filename, f.f_globals)
+            stale_key = (filename, id(f.f_globals))
+            if stale_key not in stale:
+                stale[stale_key] = _is_source_stale(filename, f.f_globals)
             # Must defer line lookups until we have called checkcache.
             if capture_locals:
                 f_locals = f.f_locals
@@ -542,6 +573,7 @@ class StackSummary(list):
                     lookup_line=False, locals=f_locals,
                     end_lineno=end_lineno, colno=colno, end_colno=end_colno,
                     _code=f.f_code,
+                    _source_stale=stale[stale_key],
                 )
             )
         for filename in fnames:
@@ -603,9 +635,11 @@ class StackSummary(list):
         if frame_summary._dedented_lines and frame_summary._dedented_lines.strip():
             if (
                 frame_summary.colno is None or
-                frame_summary.end_colno is None
+                frame_summary.end_colno is None or
+                frame_summary._source_stale
             ):
                 # only output first line if column information is missing
+                # or cannot be trusted
                 row.append(textwrap.indent(frame_summary.line, '    ') + "\n")
             else:
                 # get first and last line
@@ -750,6 +784,8 @@ class StackSummary(list):
                 row.append(
                     textwrap.indent(textwrap.dedent("".join(result)), '    ', lambda line: True)
                 )
+        if frame_summary._source_stale:
+            row.append(f'    {_STALE_SOURCE_NOTE}\n')
         if frame_summary.locals:
             for name, value in sorted(frame_summary.locals.items()):
                 row.append('    {name} = {value}\n'.format(name=name, value=value))

@@ -105,6 +105,12 @@ Improved error messages
   :class:`tuple`, identifying the index of the item whose hash failed.
   (Contributed by Ivan Zorin in :gh:`161433`.)
 
+* Tracebacks now warn when the source file of a module was modified after its
+  code was loaded, since the source lines shown may not be the code which was
+  executed.  This happens, for example, when a module is edited but not
+  reloaded.  The position markers are omitted for such frames.
+  (Contributed by Diego Mascialino in :gh:`52334`.)
+
 
 Other language changes
 ======================

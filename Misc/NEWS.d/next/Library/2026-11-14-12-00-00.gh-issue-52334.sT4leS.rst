@@ -1,0 +1,3 @@
+Tracebacks now warn when the source file of a module was modified after its
+code was loaded, as the source lines shown may not be the code which was
+executed. Patch by Diego Mascialino.
