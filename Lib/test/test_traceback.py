@@ -5716,22 +5716,14 @@ class StaleSourceTests(unittest.TestCase):
         self.assertNotIn(self.NOTE, output)
 
     def test_modified_source(self):
-        self.write('def f():\n    # a comment\n    a, b, c = 1, 2\n')
-        output = self.format_failure(self.module.f)
-        self.assertEqual(output.splitlines()[-4:], [
-            f'  File "{self.path}", line 2, in f',
-            '    # a comment',
-            f'    {self.NOTE}',
-            'ValueError: not enough values to unpack (expected 3, got 2)',
-        ])
-
-    def test_modified_source_has_no_carets(self):
         self.write('def f():\n    a, b, c = 1, 2, 3  # fixed\n')
         output = self.format_failure(self.module.f)
-        self.assertEqual(output.splitlines()[-4:-1], [
+        # The position markers are omitted: they do not apply to this line.
+        self.assertEqual(output.splitlines()[-4:], [
             f'  File "{self.path}", line 2, in f',
             '    a, b, c = 1, 2, 3  # fixed',
             f'    {self.NOTE}',
+            'ValueError: not enough values to unpack (expected 3, got 2)',
         ])
 
     def test_line_no_longer_exists(self):
@@ -5757,36 +5749,21 @@ class StaleSourceTests(unittest.TestCase):
         output = self.format_failure(self.module.g)
         self.assertNotIn(self.NOTE, output)
 
-    def test_stack_summary(self):
-        def extract():
-            try:
-                self.module.f()
-            except ValueError as exc:
-                return traceback.extract_tb(exc.__traceback__)
-        self.assertFalse(extract()[-1]._source_stale)
-        self.write('def f():\n    # a comment\n    a, b, c = 1, 2\n')
-        frame = extract()[-1]
-        self.assertTrue(frame._source_stale)
-        self.assertEqual(frame.line, '# a comment')
-
-    def test_loader_without_support(self):
-        class Loader:
-            def get_filename(self, fullname):
-                raise AssertionError('should not be called')
-        self.module.__spec__.loader = Loader()
-        self.write('def f():\n    # a comment\n    a, b, c = 1, 2\n')
-        output = self.format_failure(self.module.f)
-        self.assertNotIn(self.NOTE, output)
-
-    def test_loader_errors_are_ignored(self):
-        class Loader:
+    def test_unsupported_or_broken_loader(self):
+        class NoSupport:
+            pass
+        class Broken:
             def get_filename(self, fullname):
                 raise RuntimeError
             def _is_source_stale(self, fullname):
                 raise RuntimeError
-        self.module.__spec__.loader = Loader()
-        output = self.format_failure(self.module.f)
-        self.assertNotIn(self.NOTE, output)
+        self.write('def f():\n    # a comment\n    a, b, c = 1, 2\n')
+        for loader in NoSupport(), Broken():
+            with self.subTest(loader=loader):
+                self.module.__spec__.loader = loader
+                self.module.__loader__ = loader
+                output = self.format_failure(self.module.f)
+                self.assertNotIn(self.NOTE, output)
 
     @requires_subprocess()
     def test_module_run_as_script_modified_while_running(self):

@@ -66,6 +66,11 @@ class SimpleTest:
             with open(source, 'a', encoding='utf-8') as fp:
                 fp.write('# changed\n')
             self.assertIs(loader._is_source_stale('_temp'), True)
+            # A different timestamp is enough, even with the same size.
+            loader.get_code('_temp')
+            st = os.stat(source)
+            os.utime(source, (st.st_atime, st.st_mtime + 10))
+            self.assertIs(loader._is_source_stale('_temp'), True)
             # Loading again makes the loader up to date.
             loader.get_code('_temp')
             self.assertIs(loader._is_source_stale('_temp'), False)
@@ -73,19 +78,6 @@ class SimpleTest:
             self.assertIsNone(loader._is_source_stale('_temp' + 'XXX'))
             os.unlink(source)
             self.assertIsNone(loader._is_source_stale('_temp'))
-
-    def test_is_source_stale_same_size(self):
-        with util.create_modules('_temp') as mapping:
-            source = mapping['_temp']
-            with open(source, 'wb') as fp:
-                fp.write(b'state = "old"')
-            os.utime(source, (50, 50))
-            loader = self.machinery.SourceFileLoader('_temp', source)
-            loader.get_code('_temp')
-            with open(source, 'wb') as fp:
-                fp.write(b'state = "new"')
-            os.utime(source, (60, 60))
-            self.assertIs(loader._is_source_stale('_temp'), True)
 
     def test_equality_after_loading(self):
         # What was loaded is not part of the identity of the loader.
