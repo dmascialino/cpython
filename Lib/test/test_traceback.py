@@ -5681,6 +5681,7 @@ class TestLazyImportSuggestions(unittest.TestCase):
         self.assertNotIn(b"BAR_MODULE_LOADED", stdout)
 
 
+@force_not_colorized_test_class
 class StaleSourceTests(unittest.TestCase):
     # gh-52334: tell when the source shown is not the code that ran.
 
