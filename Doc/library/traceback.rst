@@ -483,8 +483,17 @@ the module-level functions described above.
       repetitions are shown, followed by a summary line stating the exact
       number of further repetitions.
 
+      If the source file of a module was modified after its code was loaded
+      (for example, the module was edited but not reloaded), the source lines
+      shown may not be the code which was executed.  In that case a warning
+      line is added to the frame and the position markers are omitted.
+
       .. versionchanged:: 3.6
          Long sequences of repeated frames are now abbreviated.
+
+      .. versionchanged:: next
+         Frames whose source file was modified after its code was loaded
+         are now reported with a warning.
 
    .. method:: format_frame_summary(frame_summary)
 

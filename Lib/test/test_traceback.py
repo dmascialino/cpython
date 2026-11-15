@@ -14,6 +14,7 @@ import re
 import tempfile
 import random
 import string
+import importlib
 import importlib.machinery
 import sysconfig
 from test import support
@@ -23,7 +24,7 @@ from test.support import (Error, captured_output, cpython_only, ALWAYS_EQ,
                           requires_subprocess, os_helper)
 from test.support.os_helper import TESTFN, temp_dir, unlink
 from test.support.script_helper import assert_python_ok, assert_python_failure, make_script
-from test.support.import_helper import ensure_lazy_imports, forget
+from test.support.import_helper import DirsOnSysPath, ensure_lazy_imports, forget
 from test.support import force_not_colorized, force_not_colorized_test_class
 
 import json
@@ -5678,6 +5679,112 @@ class TestLazyImportSuggestions(unittest.TestCase):
         rc, stdout, stderr = assert_python_failure('-c', code)
         self.assertIn(b"__name__", stderr)
         self.assertNotIn(b"BAR_MODULE_LOADED", stdout)
+
+
+@force_not_colorized_test_class
+class StaleSourceTests(unittest.TestCase):
+    # gh-52334: tell when the source shown is not the code that ran.
+
+    NOTE = traceback._STALE_SOURCE_NOTE
+
+    def setUp(self):
+        self.modname = 'stale_source_test_mod'
+        tmp = self.enterContext(temp_dir())
+        self.enterContext(DirsOnSysPath(tmp))
+        self.path = os.path.join(tmp, self.modname + '.py')
+        self.addCleanup(forget, self.modname)
+        self.addCleanup(linecache.clearcache)
+        self.write('def f():\n    a, b, c = 1, 2\n')
+        importlib.invalidate_caches()
+        self.module = importlib.import_module(self.modname)
+
+    def write(self, source):
+        # The size always changes, so that the modification is detected
+        # even if the timestamp of the file does not change.
+        with open(self.path, 'w', encoding='utf-8') as f:
+            f.write(source)
+
+    def format_failure(self, func):
+        try:
+            func()
+        except ValueError as exc:
+            return ''.join(traceback.format_exception(exc, colorize=False))
+        self.fail('ValueError not raised')
+
+    def test_unmodified_source(self):
+        output = self.format_failure(self.module.f)
+        self.assertIn('    a, b, c = 1, 2\n', output)
+        self.assertNotIn(self.NOTE, output)
+
+    def test_modified_source(self):
+        self.write('def f():\n    a, b, c = 1, 2, 3  # fixed\n')
+        output = self.format_failure(self.module.f)
+        # The position markers are omitted: they do not apply to this line.
+        self.assertEqual(output.splitlines()[-4:], [
+            f'  File "{self.path}", line 2, in f',
+            '    a, b, c = 1, 2, 3  # fixed',
+            f'    {self.NOTE}',
+            'ValueError: not enough values to unpack (expected 3, got 2)',
+        ])
+
+    def test_line_no_longer_exists(self):
+        self.write('# nothing to see here\n')
+        output = self.format_failure(self.module.f)
+        self.assertEqual(output.splitlines()[-3:-1], [
+            f'  File "{self.path}", line 2, in f',
+            f'    {self.NOTE}',
+        ])
+
+    def test_reloaded_module(self):
+        self.write('def f():\n    # a comment\n    a, b, c = 1, 2\n')
+        importlib.reload(self.module)
+        output = self.format_failure(self.module.f)
+        self.assertIn('line 3, in f\n    a, b, c = 1, 2\n', output)
+        self.assertNotIn(self.NOTE, output)
+
+    def test_other_filename_in_module_globals(self):
+        # Code which does not come from the source file of the module.
+        code = compile('def g():\n    a, b, c = 1, 2\n', '<generated>', 'exec')
+        exec(code, self.module.__dict__)
+        self.write('def f():\n    pass  # changed\n')
+        output = self.format_failure(self.module.g)
+        self.assertNotIn(self.NOTE, output)
+
+    def test_unsupported_or_broken_loader(self):
+        class NoSupport:
+            pass
+        class Broken:
+            def get_filename(self, fullname):
+                raise RuntimeError
+            def _is_source_stale(self, fullname):
+                raise RuntimeError
+        self.write('def f():\n    # a comment\n    a, b, c = 1, 2\n')
+        for loader in NoSupport(), Broken():
+            with self.subTest(loader=loader):
+                self.module.__spec__.loader = loader
+                self.module.__loader__ = loader
+                output = self.format_failure(self.module.f)
+                self.assertNotIn(self.NOTE, output)
+
+    @requires_subprocess()
+    def test_module_run_as_script_modified_while_running(self):
+        script = textwrap.dedent("""\
+            with open(__file__, encoding='utf-8') as f:
+                source = f.read()
+            with open(__file__, 'w', encoding='utf-8') as f:
+                f.write('\\n# a comment\\n' + source)
+            1/0
+        """)
+        with temp_dir() as script_dir:
+            make_script(script_dir, 'stale_source_script', script)
+            rc, stdout, stderr = assert_python_failure(
+                '-m', 'stale_source_script', PYTHONPATH=script_dir)
+        self.assertEqual(stderr.decode().splitlines()[-3:], [
+            # Line 5 of the modified file; the code that ran is "1/0".
+            "    with open(__file__, 'w', encoding='utf-8') as f:",
+            f'    {self.NOTE}',
+            'ZeroDivisionError: division by zero',
+        ])
 
 
 class LazyImportTest(unittest.TestCase):

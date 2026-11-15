@@ -55,6 +55,41 @@ class SimpleTest:
         other = self.machinery.SourceFileLoader('_' + self.name, self.filepath)
         self.assertNotEqual(self.loader, other)
 
+    def test_is_source_stale(self):
+        with util.create_modules('_temp') as mapping:
+            source = mapping['_temp']
+            loader = self.machinery.SourceFileLoader('_temp', source)
+            # Nothing was loaded yet.
+            self.assertIsNone(loader._is_source_stale('_temp'))
+            loader.get_code('_temp')
+            self.assertIs(loader._is_source_stale('_temp'), False)
+            with open(source, 'a', encoding='utf-8') as fp:
+                fp.write('# changed\n')
+            self.assertIs(loader._is_source_stale('_temp'), True)
+            # A different timestamp is enough, even with the same size.
+            loader.get_code('_temp')
+            st = os.stat(source)
+            os.utime(source, (st.st_atime, st.st_mtime + 10))
+            self.assertIs(loader._is_source_stale('_temp'), True)
+            # Loading again makes the loader up to date.
+            loader.get_code('_temp')
+            self.assertIs(loader._is_source_stale('_temp'), False)
+            # Not the module handled by this loader.
+            self.assertIsNone(loader._is_source_stale('_temp' + 'XXX'))
+            os.unlink(source)
+            self.assertIsNone(loader._is_source_stale('_temp'))
+
+    def test_equality_after_loading(self):
+        # What was loaded is not part of the identity of the loader.
+        with util.create_modules('_temp') as mapping:
+            source = mapping['_temp']
+            loader = self.machinery.SourceFileLoader('_temp', source)
+            other = self.machinery.SourceFileLoader('_temp', source)
+            loader.get_code('_temp')
+            self.assertEqual(loader, other)
+            self.assertEqual(other, loader)
+            self.assertEqual(hash(loader), hash(other))
+
 
     def fake_mtime(self, fxn):
         """Fake mtime to always be higher than expected."""
